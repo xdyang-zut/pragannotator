@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<!-- 头部和样式部分保持不变，省略... -->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PragAnnotation v1.0</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+        .hidden {
+            display: none;
+        }
+        #apiKeySection {
+            margin: 20px 0;
+        }
+        #textInput {
+            width: 100%;
+            min-height: 100px;
+            resize: vertical;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        #resultDisplay {
+            width: 100%;
+            min-height: 50px;
+            resize: vertical;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid lightgray;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+            line-height: 1.5;
+            background-color: #f8f9fa;
+            color: #333;
+            rows: 15;
+            white-space: pre;
+        }
+        #resultDisplay:focus {
+            outline: none;
+            border-color: #4CAF50;
+            box-shadow: 0 0 5px rgba(76, 175, 80, 0.2);
+        }
+        .button-group {
+            margin: 20px 0;
+        }
+        button, input[type="file"]::file-selector-button {
+            padding: 8px 16px;
+            margin-right: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            height: 35px;
+            width: 120px;
+        }
+        button:hover, input[type="file"]::file-selector-button:hover {
+            background-color: #45a049;
+        }
+        .header-section {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .api-section {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .result-section {
+            flex: 0 0 auto;
+            margin-bottom: 20px;
+        }
+        #apiKey {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            width: 300px;
+        }
+        select {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            background-color: white;
+        }
+        .price-display {
+            margin-left: 10px;
+            color: #666;
+        }
+        .cost-display {
+            margin-left: 10px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <h1>PragAnnotator v1.0</h1>
+
+    <div class="header-section">
+        <div class="api-section">
+            <label>选择API:</label>
+            <select id="apiSelect">
+                <option value="openrouter">OpenRouter</option>
+                <option value="openai">OpenAI</option>
+            </select>
+            <select id="modelSelect">
+                <option value="gpt-4o-mini">gpt-4o-mini</option>
+            </select>
+            <span id="priceDisplay" class="price-display"></span>
+        </div>
+        <button id="resetBtn" class="hidden" onclick="resetSettings()">复位设置</button>
+    </div>
+
+    <div id="apiKeySection">
+        <input type="password" id="apiKey" placeholder="请输入API Key">
+        <button onclick="confirmApiKey()">确认</button>
+    </div>
+
+    <div id="mainSection" class="hidden">
+        <div class="button-group">
+            <input type="file" id="fileInput" accept=".txt">
+        </div>
+
+        <div>
+            <textarea id="textInput" rows="2" placeholder="或者在此粘贴文本"></textarea>
+        </div>
+
+        <div class="button-group">
+            <button onclick="processText()" id="processBtn">开始处理</button>
+            <button id="downloadBtn" class="hidden" onclick="downloadResult()">下载标注文本</button>
+            <span id="costDisplay" class="cost-display"></span>
+        </div>
+
+        <div class="result-section">
+            <textarea id="resultDisplay" rows="10" readonly placeholder="标注结果将在这里显示"></textarea>
+        </div>
+    </div>
+    
+    <script>
+        let selectedApi = 'openrouter';
+        let selectedModel = 'gpt-4o-mini';
+        let originalFileName = '';
+        let processedText = '';
+        let inputTokenCount = 0;
+        let outputTokenCount = 0;
+        let confirmedApiKey = '';
+
+        const modelPrices = {
+            'openrouter': {
+                'gpt-4o-mini': '0.15/1M',
+                'gpt-4o-mini-2024-07-18': '$0.15/1M',
+                'gpt-4o-2024-08-06': '$2.5/1M',
+                'chatgpt-4o-latest': '$5/1M',
+                'anthropic/claude-3.5-sonnet': '$3/1M',
+                'mistralai/mistral-7b-instruct': '$0.055/1M',
+                'mistralai/mistral-7b-instruct:free': '免费',
+                'nvidia/llama-3.1-nemotron-70b-instruct': '$0.035/1M',
+                'meta-llama/llama-3.1-8b-instruct:free': '免费',
+                'google/gemini-flash-1.5-8b': '$0.0375/1M',
+                'google/gemini-flash-1.5-8b-exp': '免费',
+                'google/gemini-pro-1.5-exp': '免费'
+            },
+            'openai': {
+                'gpt-4o-mini': '0.15/1M',
+                'gpt-4o-mini-2024-07-18': '0.15/1M'
+            }
+        };
+
+        function updateModelSelect() {
+            const modelSelect = document.getElementById('modelSelect');
+            modelSelect.innerHTML = '';
+            const models = modelPrices[selectedApi];
+            Object.keys(models).forEach(model => {
+                const option = document.createElement('option');
+                option.value = model;
+                option.text = model;
+                modelSelect.appendChild(option);
+            });
+            updatePriceDisplay();
+        }
+
+        function updatePriceDisplay() {
+            const price = modelPrices[selectedApi][selectedModel];
+            document.getElementById('priceDisplay').textContent = `价格: ${price}`;
+        }
+
+        document.getElementById('apiSelect').addEventListener('change', function(e) {
+            selectedApi = e.target.value;
+            updateModelSelect();
+        });
+
+        document.getElementById('modelSelect').addEventListener('change', function(e) {
+            selectedModel = e.target.value;
+            updatePriceDisplay();
+        });
+
+        function calculateCost(text) {
+            const tokenEstimate = Math.ceil(text.length / 4);
+            let priceStr = modelPrices[selectedApi][selectedModel];
+            if (priceStr === '免费') return 0;
+            
+            const pricePerMillion = parseFloat(priceStr.replace(/[^0-9.]/g, ''));
+            const cost = (tokenEstimate / 1000000) * pricePerMillion;
+            return cost;
+        }
+
+        function displayCost(cost) {
+            if (cost === 0) {
+                document.getElementById('costDisplay').textContent = '本次免费';
+                return;
+            }
+            const usdCost = cost.toFixed(4);
+            const cnyCost = (cost * 7.2).toFixed(4);
+            document.getElementById('costDisplay').textContent = 
+                `本次花费$${usdCost}，约${cnyCost}人民币`;
+        }
+
+        function confirmApiKey() {
+            confirmedApiKey = document.getElementById('apiKey').value;
+            if(confirmedApiKey) {
+                document.getElementById('apiKeySection').classList.add('hidden');
+                document.getElementById('mainSection').classList.remove('hidden');
+                document.getElementById('resetBtn').classList.remove('hidden');
+            }
+        }
+
+        function resetSettings() {
+            confirmedApiKey = '';
+            document.getElementById('apiKey').value = '';
+            document.getElementById('apiKeySection').classList.remove('hidden');
+            document.getElementById('mainSection').classList.add('hidden');
+            document.getElementById('resetBtn').classList.add('hidden');
+            document.getElementById('downloadBtn').classList.add('hidden');
+            document.getElementById('textInput').value = '';
+            document.getElementById('fileInput').value = '';
+            document.getElementById('resultDisplay').value = '';
+            document.getElementById('costDisplay').textContent = '';
+        }
+
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if(file) {
+                originalFileName = file.name;
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('textInput').value = e.target.result;
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        async function processText() {
+            const text = document.getElementById('textInput').value;
+            if(!text) return;
+
+            if(!confirmedApiKey) {
+                alert('请先确认API Key');
+                return;
+            }
+            
+            // 显示处理中状态
+            document.getElementById('processBtn').textContent = '正在处理......';
+            document.getElementById('processBtn').disabled = true;
+
+            // 清除上一次的结果和下载按钮
+            document.getElementById('resultDisplay').value = '';
+            document.getElementById('downloadBtn').classList.add('hidden');
+            document.getElementById('costDisplay').textContent = '';
+            
+            const cost = calculateCost(text);
+            
+            const apiUrl = 'https://openrouter.ai/api/v1/chat/completions';
+            
+            const headers = {
+                'Authorization': `Bearer ${confirmedApiKey}`,
+                'Content-Type': 'application/json'
+            };
+
+            // 根据不同的模型构建不同的请求体
+            let modelName = selectedModel;
+            if (selectedModel.includes('claude')) {
+                modelName = 'anthropic/claude-3.5-sonnet';
+            } else if (selectedModel.includes('mistral')) {
+                modelName = selectedModel.includes('free') ? 
+                    'mistralai/mistral-7b-instruct:free' : 
+                    'mistralai/mistral-7b-instruct';
+            } else if (selectedModel.includes('llama')) {
+                modelName = selectedModel.includes('free') ? 
+                    'meta-llama/llama-3.1-8b-instruct:free' : 
+                    'nvidia/llama-3.1-nemotron-70b-instruct';
+            } else if (selectedModel.includes('gemini')) {
+                if (selectedModel.includes('flash')) {
+                    modelName = selectedModel.includes('exp') ?
+                        'google/gemini-flash-1.5-8b-exp' :
+                        'google/gemini-flash-1.5-8b';
+                } else {
+                    modelName = 'google/gemini-pro-1.5-exp';
+                }
+            }
+
+            const body = {
+                model: modelName,
+                messages: [
+                    {
+                        role: 'system',
+                        content: `
+                    You are an expert in linguistic text analysis and pragmatic representation. Your task is to analyze the input texts and accurately mark up pragmatic properties, strictly adhering to the following format:
+                        
+                        <?xml version="1.0"?>
+                        <dialogue>
+                        <turn n="1" speaker="A">
+                        <frag n="1" sp-act="greet" polarity="positive" topic="opening" mode="deixis-greet">
+                        good afternoon
+                        </frag>
+                        <frag n="2" sp-act="identifySelf" polarity="positive" topic="intro" mode="deixis">
+                        Virgin train line Sandra speaking
+                        </frag>
+                        <q-wh n="3" sp-act="reqDirect" polarity="positive" topic="journey-preference" mode="open">
+                        for which journey do you wish to purchase a ticket
+                        </q-wh>
+                        </turn>
+                        <turn n="2" speaker="B">
+                        <frag n="4" sp-act="direct" polarity="positive" topic="to-location" mode="closure">
+                        er Euston to Manchester please
+                        </frag>
+                        </turn>
+                        </dialogue>
+                        
+                    Detailed Instructions:
+
+                    1. Tag Description:
+                        - Turn Structure (<turn>): 
+                            - Attributes:
+                                - n: Sequential number representing the order of the turn.
+                                - speaker: Identifier for the speaker (e.g., "A" or "B").
+                            - Each turn encapsulates one or more fragments or dialogue elements, marking shifts in conversation.
+                        - Fragment (<frag>) and Dialogue Element Types: Within each turn, various types of elements represent utterance parts or entire responses. Types include:
+                            - General Utterance Elements:
+                                - <frag>: A general fragment of speech.
+                                - <dm>: Discourse markers.
+                                - <yes>, <no>: Affirmative or negative responses.
+                                - <decl>: Declarative statements.
+                                - <imp>: Imperatives or requests for action.
+                            - Question Types:
+                                - <q-wh>: Wh-questions, prompting open-ended information.
+                                - <q-yn>: Yes/No questions for closed information requests.
+                            - Attributes for Each Element:
+                                - n: Unique identifier within the turn.
+                                - sp-act (Speech Act): Defines the communicative function, such as:
+                                    - greet, refer, identifySelf, reqDirect, direct-state, reqConfirm, confirm-accept, init, reqInfo, answer-acknowledge, answer-refer, stateConstraint, approve, expressWisht, hesitate, abandon, elab-state, expressOpinion, elab-abandon, pardon, answer-stateConstraint, reqOpt, exclaim, echo-refer, complete-reqConfirm, correct, predict, expressImPossibility, expressPossibility, stateOpt, expressUnCertainty, hold, apologise, expressRegret, thank, bye
+                                - polarity: Indicates the sentiment or stance:
+                                    -positive, negative, or neutral.
+                                - topic: Marks the subject or focus, such as:
+                                    - journey-preference, fare, creditcard, number, or complex topics like location-to-month-day-from-date for combined journey specifics.
+                                - mode: Contextualizes the discourse mode, such as:
+                                    - deixis, closure, intent, appreciate, exists, condition-constrain, and more complex modes like intent-condition-report.
+                    2. Key Rules:
+                        - Line-by-Line Annotation: Mark each line of dialogue separately. Do not combine multiple lines or utterances.
+                        - Avoid Generalization or Assumptions: Use only the specific tags and attributes provided in the annotation guidelines. Do not infer or assume tags, attributes, or values not explicitly mentioned in the line.
+                        - No Duplicates: Ensure no duplicate tags or attributes appear within a single line. Each tag and attribute must appear once per context to avoid redundancy.
+                        - Consistency in Tags and Attributes: Use tag and attribute names exactly as defined in the annotation guidelines. Maintain consistency in attribute values to ensure uniformity.
+                        - No Redundant Markings: Do not include unnecessary tags or attributes if they do not add to the meaning or function of the line.
+                        - XML Format Only: The response should strictly be in XML format, without any additional text, explanations, or comments.`
+                    },
+                    {
+                        role: 'user',
+                        content: text
+                    }
+                ]
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(body)
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const data = await response.json();
+                processedText = data.choices[0].message.content.trim();
+
+                document.getElementById('resultDisplay').value = processedText;
+                document.getElementById('downloadBtn').classList.remove('hidden');
+                displayCost(cost);
+            } catch (error) {
+                console.error('处理失败:', error);
+                alert('处理失败，请检查API设置和网络连接');
+            } finally {
+                // 恢复按钮状态
+                document.getElementById('processBtn').textContent = '开始处理';
+                document.getElementById('processBtn').disabled = false;
+            }
+        }
+
+        function downloadResult() {
+            if(!processedText) return;
+
+            const blob = new Blob([processedText], {type: 'text/plain'});
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            
+            // 处理模型名称，将特殊字符替换为连字符
+            let modelNameForFile = selectedModel.replace(/[/:]/g, '-');
+            
+            if(originalFileName) {
+                const nameWithoutExt = originalFileName.replace('.txt', '');
+                a.download = `${nameWithoutExt}_tagged_${modelNameForFile}.txt`;
+            } else {
+                a.download = `annotated_text_${modelNameForFile}.txt`;
+            }
+        
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+    // 初始化页面时更新模型选择框
+    updateModelSelect();
+    </script>
+</body>
+</html>
